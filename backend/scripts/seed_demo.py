@@ -6,6 +6,7 @@ from src.models import User,Bale,Blend,BlendPortion
 from src.quality_models import SupplierLot,LotBale,PelletCheck
 from src.blending import obj
 from src.production_models import Dryer,DryingRun,PelletPack,BlendShipment,ShipmentPack
+from src.calibration_models import ReferenceSample,CalibrationVersion,CalibrationSample
 from src.security import password_hash
 
 def seed():
@@ -32,5 +33,11 @@ def seed():
                 bale=s.scalar(select(Bale).where(Bale.code==bale_code))
                 if not s.scalar(select(LotBale.id).where(LotBale.bale_id==bale.id)):
                     s.add(LotBale(lot_id=lot.id,bale_id=bale.id,received_snapshot=obj(bale)))
-    with Session() as s:print(json.dumps({k:s.scalar(select(func.count()).select_from(v)) for k,v in [('users',User),('bales',Bale),('blends',Blend),('portions',BlendPortion),('supplier_lots',SupplierLot),('lot_bales',LotBale),('pellet_checks',PelletCheck),('dryers',Dryer),('drying_runs',DryingRun),('packs',PelletPack),('shipments',BlendShipment),('shipment_packs',ShipmentPack)]}))
+        # Paired rapid-tester / lab PVC readings; the demo tester reads systematically high.
+        refs=[('RS-01','SL-ACCEPT-17',15),('RS-02','SL-ACCEPT-17',40),('RS-03','SL-ACCEPT-17',75),('RS-04','SL-ACCEPT-17',180),('RS-05','SL-HOLD-17',22),('RS-06','SL-HOLD-17',55),('RS-07','SL-HOLD-17',95),('RS-08','SL-HOLD-17',210)]
+        for i,(code,lot_code,lab) in enumerate(refs):
+            if s.scalar(select(ReferenceSample).where(ReferenceSample.code==code)):continue
+            lot=s.scalar(select(SupplierLot).where(SupplierLot.code==lot_code))
+            s.add(ReferenceSample(code=code,lot_id=lot.id,instrument_ppm=Decimal(str(round(lab*1.18+6,3))),lab_ppm=Decimal(str(lab)),state='active',created_by='seed',created_at='2026-11-17T08:30:00+00:00'))
+    with Session() as s:print(json.dumps({k:s.scalar(select(func.count()).select_from(v)) for k,v in [('users',User),('bales',Bale),('blends',Blend),('portions',BlendPortion),('supplier_lots',SupplierLot),('lot_bales',LotBale),('pellet_checks',PelletCheck),('dryers',Dryer),('drying_runs',DryingRun),('packs',PelletPack),('shipments',BlendShipment),('shipment_packs',ShipmentPack),('reference_samples',ReferenceSample),('calibration_versions',CalibrationVersion),('calibration_samples',CalibrationSample)]}))
 if __name__=='__main__':seed()

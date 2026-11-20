@@ -17,9 +17,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 |角色|账号|口令|主要动作|
 |---|---|---|---|
-|admin 投料主管|admin@huanli.local|Blend2026!|全部操作、最终投料放行、供应批隔离/解除、烘干验收、成品证书签发、发车冻结清单|
-|blender 配混员|blender@huanli.local|Blend2026!|检验、分群、立单、称料、审秤、待放行单退回；供应批挂包、粒料取样与隔离复检、烘干安排/复测、包装称重/封箱、客户签收；无最终投料及发证权限|
-|viewer 质检观察员|viewer@huanli.local|Blend2026!|只读九个页面及交接轨迹|
+|admin 投料主管|admin@huanli.local|Blend2026!|全部操作、最终投料放行、供应批隔离/解除、烘干验收、成品证书签发、发车冻结清单、撤销参考样|
+|blender 配混员|blender@huanli.local|Blend2026!|检验、分群、立单、称料、审秤、待放行单退回；供应批挂包、粒料取样与隔离复检、烘干安排/复测、包装称重/封箱、客户签收；登记参考样与拟合校准；无最终投料、发证及撤销参考样权限|
+|viewer 质检观察员|viewer@huanli.local|Blend2026!|只读十个页面及交接轨迹|
 
 ## 业务流程与约束
 
@@ -35,6 +35,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 8. 烘干含水复检：主管登记Dryer设备，released配方开DryingRun，设备行锁核时段，配方唯一作业；投入含水由称料质量快照加权计算。含水>0.05%记redry，延烘结束不可倒退且须重查设备后续占用；复测≤0.05%记passed，主管验收accepted后才允许成品新签证，证书加入烘干快照；旧certified不重算。
 9. 包装箱码追溯：certified成品按唯一箱码分包，锁同成品校验有效包装累计≤actual_kg；open可改重或取消释放额度，sealed后冻结，证书快照随箱保存。已装车仍计入累计，避免重复包装同一产出。
 10. 装车客户签收：同车只能装同配方sealed箱，ShipmentPack.pack_id唯一，加载后包状态loaded阻止再次出库；主管发车保存冻结manifest。实收与清单差率绝对值>0.5%须至少8字依据，记录客户签收快照后不得重复签收。仅本地记录交接，无实际运输消息。
+11. 快检仪PVC校准：同份参考样的快检仪与实验室读数拟合校准直线（最小二乘 y=slope×读数+intercept），按供应批逐一留出验证（leave-one-lot-out），留出RMSE低于原读数才启用，否则记为rejected不启用。启用即取代旧版（superseded）并重算全场料包校准值；原读数保留，分群与称料改用校准值，称料行保存校准版本快照。主管撤销参考样（≥8字依据）后，依赖它的校准版本立即disabled并记录停用原因；失效版本称料的配方拒绝审秤与放行且不扣料，已投料凭据照旧。撤销与放行并发时按料包→校准版本顺序加锁，撤销先提交则放行失败不扣料。料包堆场页可查每包所用校准版本与停用原因。
 
 已被任何配方引用的料包质量/原始重量不得修改；可用量只在放行扣减。重做全场分群会更新堆场当前群号，既有配方继续使用原称料时的质量/群号快照。对旧快照配方添加新版本料包会被审秤拦截，需退回并整体重新称料。
 
@@ -45,6 +46,8 @@ docker compose exec -T backend python -m scripts.seed_demo
 17:00在「供应隔离复核」查看SL-ACCEPT-17（PET-129可用）与SL-HOLD-17（PET-131隔离），将新批SL-03关联PET-124；先审秤后隔离，再尝试最终投料，应实时拒绝且不扣料。主管按复检说明解除后方可投料。17:30已投料100kg配方的成品取样96kg、MI9.1、PVC65ppm，超过40ppm记隔离；清线复检24ppm，主管发合格证。初次65ppm、复检24ppm和投料快照全部保留。
 
 V3演练：11月24日DRY-B接BL-PELLET-UI的100kg投料，08:00—12:00烘干；实测0.04%，主管验收后成品96kg/20ppm才签证。包装PK-BROWSER-V3为25kg，封箱后放入SH-BROWSER-V3，客户华远注塑一号原料库，主管发车，客户签24.9kg，差率-0.4%保存。API另演练0.08%延烘、撞时段拒绝、包装超重/取消释放及超签收差异说明。
+
+V4演练：seed自带RS-01…RS-08八份参考样（快检仪系统性偏高约18%+6ppm，分属SL-ACCEPT-17与SL-HOLD-17）。「仪器校准」页点拟合：留出RMSE从约25ppm降到1ppm内，CAL-0001启用，全场料包显示校准值与原读数；重新分群后称料，秤台留样各行带校准标签。主管撤销RS-01（填依据）后CAL-0001立即停用，用其称料的ready配方放行被拒且不扣料，退回草稿重新称料（快照回落原读数）后放行成功；已投料的BL配方保持released。再登记instrument=lab的参考样拟合，误差未降记rejected不启用。
 
 ## 真实ML计算
 
@@ -66,7 +69,9 @@ V3演练：11月24日DRY-B接BL-PELLET-UI的100kg投料，08:00—12:00烘干；
 
 V3 `backend/src/production_models.py`定义Dryer/DryingRun/PelletPack/BlendShipment/ShipmentPack；`production_schemas.py`校验时间、含水、称重与客户收货；`production_service.py`设备锁/时段重叠、累计包装锁、装车唯一和签收差率；`production_routes.py`提供`/dryers`、`/drying-runs`、`/pellet-packs`、`/blend-shipments`。新加5张表，原表列无变更，create_all兼容历史记录。
 
-`frontend/src/pages/yard.js`堆场；`clusters.js`真实散点与中心；`bench.js`可增删称料行；`release.js`交接簿；`lots.js`供应隔离复核；`pellets.js`粒料检验与证书；`drying.js`含水复检；`packs.js`包装箱码；`shipments.js`装车客户签收。`components/labels.js`共享群标签、状态条、标签页、标题与通知，群标签在图谱、秤台与放行中复用。`utils/api.js`会话/接口/store，`utils/format.js`数字/转义/上海时区。角色、配方状态、供应批、成品检验、烘干、包装和装车状态枚举定义在`backend/src/constants.py`、`frontend/src/constants.js`，状态实际转移在`blending.py`与`main.py`，标签渲染在`components/labels.js`。
+V4 `backend/src/calibration_models.py`定义ReferenceSample/CalibrationVersion/CalibrationSample（版本-参考样依赖表）；`calibration_schemas.py`校验两种读数与撤销依据；`calibration_service.py`最小二乘拟合、按供应批留出验证、启用重算与撤销失效；`calibration_routes.py`提供`/reference-samples`（含revoke）与`/calibration-versions`。Bale加`cal_pvc_ppm`/`calibration_version_id`、BlendPortion加`calibration_version_id`快照列，均为可空新增列，create_all兼容既有数据；拟合与撤销的加锁顺序与称料放行一致（料包→校准版本）。
+
+`frontend/src/pages/yard.js`堆场（料包标签显示校准值/原读数、校准版本与停用原因）；`clusters.js`真实散点与中心；`bench.js`可增删称料行；`release.js`交接簿；`lots.js`供应隔离复核；`pellets.js`粒料检验与证书；`drying.js`含水复检；`packs.js`包装箱码；`shipments.js`装车客户签收；`calibration.js`参考样登记/撤销与校准拟合验证。`components/labels.js`共享群标签、校准标签、状态条、标签页、标题与通知，群标签在图谱、秤台与放行中复用。`utils/api.js`会话/接口/store，`utils/format.js`数字/转义/上海时区。角色、配方状态、供应批、成品检验、烘干、包装、装车与校准状态枚举定义在`backend/src/constants.py`、`frontend/src/constants.js`，状态实际转移在`blending.py`、`calibration_service.py`与`main.py`，标签渲染在`components/labels.js`。
 
 Compose恰好frontend/backend/worker/db/redis五服务，全部healthcheck。MySQL健康检查采用127.0.0.1业务账号SELECT1，避开初始化临时socket；前端和后端也用127.0.0.1。数据库、Redis和模型文件/心跳分别为命名卷。宿主默认地址池已用尽，本项目显式10.221.26.0/24；换环境冲突时调整networks。环境变量见.env.example：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET。内网DATABASE_URL/REDIS_URL/SEED_DEMO由Compose设置。
 

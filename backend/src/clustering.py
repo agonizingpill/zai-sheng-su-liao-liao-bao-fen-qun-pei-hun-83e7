@@ -3,9 +3,9 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import numpy as np
 
-def cluster(bales):
+def cluster(bales,pvc=lambda b:b.pvc_ppm):
     if len(bales)<6:raise ValueError('至少6个检验完整料包才能分3群')
-    X=np.array([[float(b.melt_index),float(b.moisture),float(b.pvc_ppm)]for b in bales])
+    X=np.array([[float(b.melt_index),float(b.moisture),float(pvc(b))]for b in bales])
     scaler=StandardScaler();z=scaler.fit_transform(X)
     if len(np.unique(z,axis=0))<3:raise ValueError('有效特征不足3种，不能稳定分群')
     km=KMeans(n_clusters=3,n_init=10,random_state=42);labels=km.fit_predict(z)

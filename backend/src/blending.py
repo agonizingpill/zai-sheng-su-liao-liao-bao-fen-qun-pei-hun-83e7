@@ -2,8 +2,9 @@ from decimal import Decimal
 from datetime import datetime,timezone
 from fastapi import HTTPException
 from sqlalchemy import select,delete
-from .models import Bale,Blend,BlendPortion,Audit
+from .models import Bale,Blend,BlendPortion,Audit,effective_pvc
 from .quality_models import SupplierLot,LotBale
+from .calibration_models import CalibrationVersion
 
 def obj(x):return {c.name:float(getattr(x,c.name)) if isinstance(getattr(x,c.name),Decimal) else getattr(x,c.name) for c in x.__table__.columns}
 def get(s,model,id,lock=False):
@@ -28,12 +29,14 @@ def set_portions(s,b,data,u):
         if p.kg>x.available_kg:raise HTTPException(409,f'{x.code}可用重量不足，未保存配方')
     s.execute(delete(BlendPortion).where(BlendPortion.blend_id==b.id))
     for p in data.portions:
-        x=bales[p.bale_id];s.add(BlendPortion(blend_id=b.id,bale_id=x.id,kg=p.kg,cluster_snapshot=x.cluster_id,version_snapshot=x.cluster_version,pvc_snapshot=x.pvc_ppm,melt_snapshot=x.melt_index,moisture_snapshot=x.moisture))
+        x=bales[p.bale_id];s.add(BlendPortion(blend_id=b.id,bale_id=x.id,kg=p.kg,cluster_snapshot=x.cluster_id,version_snapshot=x.cluster_version,pvc_snapshot=effective_pvc(x),calibration_version_id=x.calibration_version_id if x.cal_pvc_ppm is not None else None,melt_snapshot=x.melt_index,moisture_snapshot=x.moisture))
     b.weighted_pvc=None;s.flush();audit(s,u,'weighed',b.code);return view(s,b)
 def validate(s,b,locked_bales=None):
     ps=portions(s,b)
     if not ps:raise HTTPException(409,'尚未选择料包，不能审秤')
     if len({(p.version_snapshot,p.cluster_snapshot) for p in ps})!=1:raise HTTPException(409,'跨群或跨分群版本选料，不能配混')
+    cal_ids={p.calibration_version_id for p in ps}
+    if len(cal_ids)!=1:raise HTTPException(409,'称料行校准版本不一致，需退回草稿整体重新称料')
     total=sum((p.kg for p in ps),Decimal(0))
     if total!=b.target_kg:raise HTTPException(409,f'称入{total}kg与目标{b.target_kg}kg不一致')
     weighted=sum((p.kg*p.pvc_snapshot for p in ps),Decimal(0))/total
@@ -44,6 +47,12 @@ def validate(s,b,locked_bales=None):
     lot_ids=list(s.scalars(select(LotBale.lot_id).where(LotBale.bale_id.in_(ids)).distinct().order_by(LotBale.lot_id)))
     lots=list(s.scalars(select(SupplierLot).where(SupplierLot.id.in_(lot_ids)).order_by(SupplierLot.id).with_for_update().execution_options(populate_existing=True)))
     if any(x.state=='quarantine' for x in lots):raise HTTPException(409,'供应批次已隔离，不能审秤或最终投料放行')
+    cal_id=next(iter(cal_ids))
+    if cal_id is not None:
+        # Locked after bales/lots, matching the revocation order: if the revocation committed
+        # first, this read sees the disabled state and the release aborts without deducting.
+        v=s.scalar(select(CalibrationVersion).where(CalibrationVersion.id==cal_id).with_for_update().execution_options(populate_existing=True))
+        if not v or v.state=='disabled':raise HTTPException(409,f'称料所用校准版本已停用（{v.disabled_reason if v else "记录缺失"}），拒绝审秤或放行；请退回草稿重新称料')
     for p in ps:
         bale=locked_bales[p.bale_id] if locked_bales is not None else get(s,Bale,p.bale_id)
         if p.kg>bale.available_kg:raise HTTPException(409,f'{bale.code}可用重量不足，投料未扣减')

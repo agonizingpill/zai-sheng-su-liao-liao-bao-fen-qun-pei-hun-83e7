@@ -2,6 +2,10 @@ from decimal import Decimal
 from sqlalchemy import String,Numeric,ForeignKey,UniqueConstraint,CheckConstraint,Text,Integer,BigInteger
 from sqlalchemy.orm import Mapped,mapped_column
 from .database import Base
+
+def effective_pvc(b):
+    # PVC used by clustering and weighing: calibrated value when one is active, else the raw instrument reading.
+    return b.cal_pvc_ppm if b.cal_pvc_ppm is not None else b.pvc_ppm
 class User(Base):
     __tablename__='users'
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -18,6 +22,8 @@ class Bale(Base):
     melt_index:Mapped[Decimal]=mapped_column(Numeric(9,3))
     moisture:Mapped[Decimal]=mapped_column(Numeric(9,3))
     pvc_ppm:Mapped[Decimal]=mapped_column(Numeric(9,3))
+    cal_pvc_ppm:Mapped[Decimal|None]=mapped_column(Numeric(9,3),nullable=True)
+    calibration_version_id:Mapped[int|None]=mapped_column(Integer,ForeignKey('calibration_versions.id'),nullable=True)
     cluster_id:Mapped[int|None]=mapped_column(Integer,nullable=True)
     cluster_version:Mapped[int|None]=mapped_column(BigInteger,nullable=True)
 class Blend(Base):
@@ -40,6 +46,7 @@ class BlendPortion(Base):
     cluster_snapshot:Mapped[int]
     version_snapshot:Mapped[int]=mapped_column(BigInteger)
     pvc_snapshot:Mapped[Decimal]=mapped_column(Numeric(9,3))
+    calibration_version_id:Mapped[int|None]=mapped_column(Integer,nullable=True)
     melt_snapshot:Mapped[Decimal]=mapped_column(Numeric(9,3))
     moisture_snapshot:Mapped[Decimal]=mapped_column(Numeric(9,3))
 class Audit(Base):

@@ -27,6 +27,9 @@ from .quality_routes import router as quality_router
 app.include_router(quality_router)
 from .production_routes import router as production_router
 app.include_router(production_router)
+from .calibration_routes import router as calibration_router
+app.include_router(calibration_router)
+from .calibration_service import apply_active
 @app.exception_handler(IntegrityError)
 async def duplicate(request,e):return JSONResponse({'detail':'编号已存在或关联数据不合法'},status_code=409)
 @app.get('/health')
@@ -46,7 +49,7 @@ def bales(u=Depends(current)):
 def add_bale(d:BaleIn,u=Depends(current)):
     allow(u,'admin','blender')
     with Session.begin() as s:
-        x=Bale(**d.model_dump(),available_kg=d.kg);s.add(x);s.flush();audit(s,u,'bale_received',x.code);return obj(x)
+        x=Bale(**d.model_dump(),available_kg=d.kg);apply_active(s,x);s.add(x);s.flush();audit(s,u,'bale_received',x.code);return obj(x)
 @app.put('/bales/{id}')
 def edit_bale(id:int,d:BaleIn,u=Depends(current)):
     allow(u,'admin','blender')
@@ -54,7 +57,7 @@ def edit_bale(id:int,d:BaleIn,u=Depends(current)):
         b=get(s,Bale,id,True)
         if s.scalar(select(BlendPortion.id).where(BlendPortion.bale_id==id).limit(1)):raise HTTPException(409,'料包已被配方引用，质量与原始重量快照冻结')
         for k,v in d.model_dump().items():setattr(b,k,v)
-        b.available_kg=d.kg;b.cluster_id=None;b.cluster_version=None;audit(s,u,'bale_retested',b.code);return obj(b)
+        b.available_kg=d.kg;b.cluster_id=None;b.cluster_version=None;apply_active(s,b);audit(s,u,'bale_retested',b.code);return obj(b)
 @app.get('/clusters')
 def clusters(u=Depends(current)):
     return {'status':r.get('poly-cluster-state') or 'idle','result':json.loads(r.get('poly-cluster-result') or 'null'),'error':r.get('poly-cluster-error')}
